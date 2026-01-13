@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from "react";
 import {
   View,
@@ -12,6 +11,8 @@ import {
   TextInput,
   Alert,
   ActivityIndicator,
+  RefreshControl,
+  Pressable,
 } from "react-native";
 import Icon from "react-native-vector-icons/Feather";
 import { auth, db } from "../firebase/firebaseConfig";
@@ -30,13 +31,13 @@ import {
   serverTimestamp,
 } from "firebase/firestore";
 
-
 type TabType = "home" | "orders" | "profile";
 type CartItem = {
   id: string;
   name: string;
   price: number;
   quantity: number;
+  image?: string;
 };
 type Order = {
   id: string;
@@ -58,6 +59,24 @@ type MenuItem = {
   status?: string;
 };
 
+const statusColors: Record<string, string> = {
+  pending: "#FFC107",
+  confirmed: "#17A2B8",
+  preparing: "#F1A208",
+  out_for_delivery: "#007BFF",
+  delivered: "#28A745",
+  cancelled: "#DC3545",
+};
+
+const statusLabels: Record<string, string> = {
+  pending: "Pending",
+  confirmed: "Confirmed",
+  preparing: "Preparing",
+  out_for_delivery: "Out for Delivery",
+  delivered: "Delivered",
+  cancelled: "Cancelled",
+};
+
 export default function HomeScreen() {
   const [activeTab, setActiveTab] = useState<TabType>("home");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
@@ -67,13 +86,9 @@ export default function HomeScreen() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [deliveryName, setDeliveryName] = useState("");
   const [deliveryAddress, setDeliveryAddress] = useState("");
-
-  
   const [menuItems, setMenuItems] = useState<MenuItem[]>([]);
   const [categories, setCategories] = useState<{ id: string; name: string }[]>([]);
   const [loadingMenu, setLoadingMenu] = useState(true);
-
-  
   const [user, setUser] = useState<any>(null);
   const [profile, setProfile] = useState<any>({
     name: "",
@@ -84,17 +99,15 @@ export default function HomeScreen() {
     expiry: "",
     cvv: "",
   });
-
-  
   const [editProfileVisible, setEditProfileVisible] = useState(false);
   const [profileName, setProfileName] = useState("");
   const [profileEmail, setProfileEmail] = useState("");
-
-  
   const [orderConfirmedVisible, setOrderConfirmedVisible] = useState(false);
   const [lastOrderId, setLastOrderId] = useState("");
+  const [isProcessingOrder, setIsProcessingOrder] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
-  
+  // Auth state listener
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (currentUser) => {
       setUser(currentUser);
@@ -113,21 +126,21 @@ export default function HomeScreen() {
         });
         setProfileName("");
         setProfileEmail("");
-        setOrders((prev) => prev.filter((o) => !o.uid)); 
+        setOrders([]);
       }
     });
     return () => unsubscribe();
   }, []);
 
-  
-  
-  
-  
+  // Orders listener
   useEffect(() => {
-    if (!user) return;
+    if (!user) {
+      setOrders([]);
+      return;
+    }
 
     const userOrdersRef = collection(db, "users", user.uid, "orders");
-    const q = query(userOrdersRef, orderBy("timestamp", "desc"));
+    const q = query(userOrdersRef, orderBy("createdAt", "desc"));
 
     const unsubscribe = onSnapshot(
       q,
@@ -135,27 +148,46 @@ export default function HomeScreen() {
         const fetched: Order[] = snapshot.docs.map((d) => {
           const data = d.data() as any;
           return {
-            id: d.id,
+            id: data.adminOrderId || d.id,
             items: data.items || [],
             total: data.total || 0,
             deliveryName: data.deliveryName,
             deliveryAddress: data.deliveryAddress,
-            timestamp: data.timestamp,
-            status: data.status,
+            timestamp: data.createdAt || data.timestamp,
+            status: data.status || "pending",
             uid: data.uid || user.uid,
           };
         });
         setOrders(fetched);
+        setIsRefreshing(false);
       },
       (err) => {
         console.error("Error subscribing to user orders:", err);
+        const fallbackQ = query(userOrdersRef);
+        onSnapshot(fallbackQ, (snapshot) => {
+          const fetched: Order[] = snapshot.docs.map((d) => {
+            const data = d.data() as any;
+            return {
+              id: data.adminOrderId || d.id,
+              items: data.items || [],
+              total: data.total || 0,
+              deliveryName: data.deliveryName,
+              deliveryAddress: data.deliveryAddress,
+              timestamp: data.createdAt || data.timestamp,
+              status: data.status || "pending",
+              uid: data.uid || user.uid,
+            };
+          });
+          setOrders(fetched);
+          setIsRefreshing(false);
+        });
       }
     );
 
     return () => unsubscribe();
   }, [user]);
 
- 
+  // Menu items listener
   useEffect(() => {
     const q = query(collection(db, "menuItems"), where("status", "==", "active"));
 
@@ -175,7 +207,6 @@ export default function HomeScreen() {
           };
         });
 
-       
         items.sort((a: any, b: any) => {
           const aVal = a.createdAt?.seconds ?? a.createdAt?.toMillis?.() ?? 0;
           const bVal = b.createdAt?.seconds ?? b.createdAt?.toMillis?.() ?? 0;
@@ -184,7 +215,6 @@ export default function HomeScreen() {
 
         setMenuItems(items);
 
-        
         const uniqueCategories = new Set<string>();
         items.forEach((item) => {
           const cat = (item.category || "Uncategorized").trim();
@@ -210,7 +240,6 @@ export default function HomeScreen() {
     return () => unsubscribe();
   }, []);
 
-  
   const loadUserProfile = async (uid: string) => {
     try {
       const profileDoc = await getDoc(doc(db, "users", uid));
@@ -226,7 +255,6 @@ export default function HomeScreen() {
     }
   };
 
-  
   const saveUserProfile = async () => {
     if (!user) return;
 
@@ -263,7 +291,6 @@ export default function HomeScreen() {
     }
   };
 
-  
   const formatCardNumber = (text: string) => {
     const cleaned = text.replace(/\D/g, "");
     const formatted = cleaned.match(/.{1,4}/g)?.join(" ") || cleaned;
@@ -285,7 +312,24 @@ export default function HomeScreen() {
     return `•••• •••• •••• ${cleaned.slice(-4)}`;
   };
 
-  
+  const formatDate = (timestamp: any) => {
+    if (!timestamp) return "";
+    let date: Date;
+    if (timestamp?.toDate) {
+      date = timestamp.toDate();
+    } else if (timestamp instanceof Date) {
+      date = timestamp;
+    } else {
+      return "";
+    }
+    return date.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+    });
+  };
+
   const addToCart = (item: MenuItem) => {
     setCart((prev) => {
       const existing = prev.find((ci) => ci.id === item.id);
@@ -301,6 +345,7 @@ export default function HomeScreen() {
             name: item.name,
             price: parseFloat(item.price) || 0,
             quantity: 1,
+            image: item.image,
           },
         ];
       }
@@ -319,82 +364,135 @@ export default function HomeScreen() {
     );
   };
 
+  const handleClearCart = () => {
+    Alert.alert(
+      "Clear Cart",
+      "Are you sure you want to remove all items from your cart?",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Clear", style: "destructive", onPress: () => setCart([]) },
+      ]
+    );
+  };
+
   const cartTotal = () => cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const totalItems = () => cart.reduce((sum, item) => sum + item.quantity, 0);
+  const deliveryFee = 5.0;
 
   const proceedToCheckout = () => {
+    if (!user) {
+      Alert.alert(
+        "Sign In Required",
+        "Please sign in to proceed with checkout",
+        [
+          { text: "Cancel", style: "cancel" },
+          { text: "Sign In", onPress: () => { /* Navigate to login */ } },
+        ]
+      );
+      return;
+    }
     setCartVisible(false);
     setCheckoutVisible(true);
   };
 
-  /**
-   * confirmCheckout
-   * - stores order in user's subcollection (users/{uid}/orders)
-   * - stores order in top-level "orders" collection for admin access
-   * - Orders tab is populated from the user's subcollection via subscription above
-   */
   const confirmCheckout = async () => {
     if (!deliveryName || !deliveryAddress) {
       Alert.alert("Error", "Please enter delivery details!");
       return;
     }
 
+    if (isProcessingOrder) return;
+    setIsProcessingOrder(true);
+
+    const now = new Date();
     const orderPayload = {
       items: cart.map((c) => ({ ...c })),
-      total: cartTotal(),
+      total: cartTotal() + deliveryFee,
       deliveryName,
       deliveryAddress,
-      timestamp: serverTimestamp(),
+      createdAt: serverTimestamp(),
       status: "pending",
       uid: user ? user.uid : null,
     };
 
     try {
-     
       const topLevelRef = await addDoc(collection(db, "orders"), orderPayload);
       const adminOrderId = topLevelRef.id;
 
-      
       if (user) {
-        
-        await addDoc(collection(db, "users", user.uid, "orders"), {
-          ...orderPayload,
-          adminOrderId,
-        });
+        try {
+          const userOrderPayload = {
+            ...orderPayload,
+            adminOrderId,
+          };
+          
+          await addDoc(
+            collection(db, "users", user.uid, "orders"), 
+            userOrderPayload
+          );
+          
+          setOrders((prev) => [
+            {
+              id: adminOrderId,
+              items: cart,
+              total: cartTotal() + deliveryFee,
+              deliveryName,
+              deliveryAddress,
+              timestamp: now,
+              status: "pending",
+              uid: user.uid,
+            },
+            ...prev,
+          ]);
+        } catch (userOrderError: any) {
+          console.error("Error saving to user orders:", userOrderError);
+          if (userOrderError.code === "permission-denied") {
+            Alert.alert(
+              "Warning", 
+              "Order was created but not saved to your history. Please check Firestore rules."
+            );
+          }
+        }
       } else {
-        
-        
+        setOrders((prev) => [
+          {
+            id: adminOrderId,
+            items: cart,
+            total: cartTotal() + deliveryFee,
+            deliveryName,
+            deliveryAddress,
+            timestamp: now,
+            status: "pending",
+            uid: null,
+          },
+          ...prev,
+        ]);
       }
 
-     
       setLastOrderId(adminOrderId);
-      setOrders((prev) => [
-        {
-          id: adminOrderId,
-          items: cart,
-          total: cartTotal(),
-          deliveryName,
-          deliveryAddress,
-          timestamp: new Date(),
-          status: "pending",
-          uid: user ? user.uid : null,
-        },
-        ...prev,
-      ]);
-
       setCart([]);
       setDeliveryName(profileName);
       setDeliveryAddress(profile.address || "");
       setCheckoutVisible(false);
       setOrderConfirmedVisible(true);
-      setActiveTab("orders");
-    } catch (error) {
+      
+    } catch (error: any) {
       console.error("Error saving order to Firestore:", error);
-      Alert.alert("Error", "There was a problem placing your order. Please try again.");
+      
+      let errorMessage = "There was a problem placing your order. Please try again.";
+      
+      if (error.code === "permission-denied") {
+        errorMessage = "Permission denied. Please check your Firestore security rules.";
+      } else if (error.code === "unavailable") {
+        errorMessage = "Service unavailable. Please check your internet connection.";
+      }
+      
+      Alert.alert("Error", errorMessage);
+    } finally {
+      setIsProcessingOrder(false);
     }
   };
 
-  
   const handleLogout = async () => {
     try {
       await logoutUser();
@@ -405,17 +503,29 @@ export default function HomeScreen() {
     }
   };
 
- 
+  const handleTrackOrder = () => {
+    setOrderConfirmedVisible(false);
+    setActiveTab("orders");
+  };
+
+  const handleBackToMenu = () => {
+    setOrderConfirmedVisible(false);
+    setActiveTab("home");
+  };
+
+  const onRefresh = () => {
+    setIsRefreshing(true);
+  };
+
   const filteredItems = selectedCategory
     ? menuItems.filter((i) => i.category === selectedCategory)
     : menuItems;
 
-  
   const renderFoodItem = ({ item }: { item: MenuItem }) => (
     <View style={styles.card}>
       <View style={styles.foodImage}>
         {item.image ? (
-          <Image source={{ uri: item.image }} style={{ width: 100, height: 100 }} />
+          <Image source={{ uri: item.image }} style={{ width: 100, height: 100, borderRadius: 8 }} />
         ) : (
           <Icon name="image" size={32} color="#888" />
         )}
@@ -435,7 +545,103 @@ export default function HomeScreen() {
     </View>
   );
 
- 
+  const renderCartItem = ({ item }: { item: CartItem }) => {
+    const itemTotal = item.price * item.quantity;
+
+    return (
+      <View style={styles.cartItemCard}>
+        <View style={styles.cartItemRow}>
+          {item.image ? (
+            <Image source={{ uri: item.image }} style={styles.cartItemImage} />
+          ) : (
+            <View style={styles.cartItemImagePlaceholder}>
+              <Icon name="image" size={24} color="#888" />
+            </View>
+          )}
+          
+          <View style={styles.cartItemInfo}>
+            <Text style={styles.cartItemName} numberOfLines={1}>{item.name}</Text>
+            <Text style={styles.cartItemPrice}>
+              R{itemTotal.toFixed(2)}
+            </Text>
+          </View>
+
+          <Pressable onPress={() => removeFromCart(item.id)} style={styles.removeButton}>
+            <Icon name="trash-2" size={18} color="#DC3545" />
+          </Pressable>
+        </View>
+
+        <View style={styles.quantityRow}>
+          <Pressable
+            onPress={() => changeQuantity(item.id, -1)}
+            style={styles.quantityButton}
+          >
+            <Icon name="minus" size={18} color="#111" />
+          </Pressable>
+          <Text style={styles.quantityValue}>{item.quantity}</Text>
+          <Pressable
+            onPress={() => changeQuantity(item.id, 1)}
+            style={styles.quantityButton}
+          >
+            <Icon name="plus" size={18} color="#111" />
+          </Pressable>
+        </View>
+      </View>
+    );
+  };
+
+  const renderOrderItem = ({ item }: { item: Order }) => {
+    const statusColor = statusColors[item.status || "pending"] || "#999";
+    const statusLabel = statusLabels[item.status || "pending"] || "Pending";
+
+    return (
+      <View style={styles.orderCard}>
+        <View style={styles.orderHeader}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.orderId}>
+              Order #{item.id.slice(0, 8).toUpperCase()}
+            </Text>
+            <Text style={styles.orderDate}>
+              {formatDate(item.timestamp)}
+            </Text>
+          </View>
+          <View style={[styles.statusBadge, { backgroundColor: statusColor }]}>
+            <Text style={styles.statusText}>{statusLabel}</Text>
+          </View>
+        </View>
+
+        <View style={styles.orderItemsContainer}>
+          {item.items.slice(0, 2).map((orderItem, index) => (
+            <Text key={index} style={styles.orderItemText}>
+              {orderItem.name} x {orderItem.quantity}
+            </Text>
+          ))}
+          {item.items.length > 2 && (
+            <Text style={styles.moreItemsText}>
+              +{item.items.length - 2} more item{item.items.length - 2 > 1 ? "s" : ""}
+            </Text>
+          )}
+        </View>
+
+        <View style={styles.orderFooter}>
+          <Text style={styles.orderTotal}>
+            R{item.total.toFixed(2)}
+          </Text>
+          <Icon name="chevron-right" size={20} color="#999" />
+        </View>
+
+        {item.deliveryAddress && (
+          <View style={styles.deliveryInfo}>
+            <Icon name="map-pin" size={14} color="#666" />
+            <Text style={styles.deliveryText} numberOfLines={1}>
+              {item.deliveryAddress}
+            </Text>
+          </View>
+        )}
+      </View>
+    );
+  };
+
   const renderHome = () => (
     <ScrollView style={{ flex: 1, paddingHorizontal: 16, paddingTop: 16 }}>
       <Text style={styles.header}>FoodHub</Text>
@@ -466,7 +672,6 @@ export default function HomeScreen() {
         ))}
       </ScrollView>
 
-     
       {loadingMenu ? (
         <ActivityIndicator size="large" color="#ff6b00" style={{ marginTop: 40 }} />
       ) : filteredItems.length === 0 ? (
@@ -487,34 +692,52 @@ export default function HomeScreen() {
     </ScrollView>
   );
 
-  
   const renderOrders = () => (
-    <ScrollView style={{ flex: 1, padding: 16 }}>
-      {orders.length === 0 ? (
+    <View style={{ flex: 1 }}>
+      {!user ? (
         <View style={styles.centered}>
-          <Text>No orders yet.</Text>
+          <Icon name="shopping-bag" size={64} color="#999" />
+          <Text style={styles.emptyTitle}>Sign In to View Orders</Text>
+          <Text style={styles.emptyText}>
+            Sign in to see your order history
+          </Text>
+          <TouchableOpacity style={styles.signInButton}>
+            <Text style={styles.signInButtonText}>Sign In</Text>
+          </TouchableOpacity>
+        </View>
+      ) : orders.length === 0 ? (
+        <View style={styles.centered}>
+          <Icon name="shopping-bag" size={64} color="#999" />
+          <Text style={styles.emptyTitle}>No Orders Yet</Text>
+          <Text style={styles.emptyText}>
+            Your order history will appear here
+          </Text>
+          <TouchableOpacity 
+            style={styles.signInButton}
+            
+  onPress={() => setActiveTab("home")}
+          >
+            <Text style={styles.signInButtonText}>Start Ordering</Text>
+          </TouchableOpacity>
         </View>
       ) : (
-        orders.map((order) => (
-          <View key={order.id} style={styles.orderCard}>
-            <Text style={{ fontWeight: "700" }}>Order #{order.id}</Text>
-            {order.items.map((item) => (
-              <Text key={item.id}>
-                {item.name} x {item.quantity} = R{(item.price * item.quantity).toFixed(2)}
-              </Text>
-            ))}
-            <Text style={{ fontWeight: "700" }}>Total: R{(order.total).toFixed(2)}</Text>
-            <Text style={{ color: "#666", marginTop: 6 }}>
-              {order.deliveryName || ""} • {order.deliveryAddress || ""}
-            </Text>
-            <Text style={{ color: "#666", marginTop: 4 }}>Status: {order.status || "pending"}</Text>
-          </View>
-        ))
+        <FlatList
+          data={orders}
+          renderItem={renderOrderItem}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
+          refreshControl={
+            <RefreshControl
+              refreshing={isRefreshing}
+              onRefresh={onRefresh}
+              tintColor="#ff6b00"
+            />
+          }
+        />
       )}
-    </ScrollView>
+    </View>
   );
 
- 
   const ProfileItem = ({
     icon,
     label,
@@ -583,14 +806,13 @@ export default function HomeScreen() {
     </ScrollView>
   );
 
-  
   return (
     <View style={styles.container}>
       {activeTab === "home" && renderHome()}
       {activeTab === "orders" && renderOrders()}
       {activeTab === "profile" && renderProfile()}
 
-      
+      {/* Cart FAB */}
       {cart.length > 0 && (
         <TouchableOpacity style={styles.cartFab} onPress={() => setCartVisible(true)}>
           <Text style={styles.cartBadge}>{totalItems()}</Text>
@@ -598,95 +820,71 @@ export default function HomeScreen() {
         </TouchableOpacity>
       )}
 
-      
+      {/* Enhanced Cart Modal */}
       <Modal visible={cartVisible} animationType="slide" transparent>
         <View style={styles.modalBackground}>
-          <View style={styles.modalContainer}>
-            <View style={{ flexDirection: "row", alignItems: "center", marginBottom: 16 }}>
-              <Text style={{ fontSize: 20, fontWeight: "700" }}>Cart</Text>
-              {cart.length > 0 && (
-                <Text style={{ fontSize: 16, color: "#666", marginLeft: 8 }}>
-                  ({totalItems()} {totalItems() === 1 ? "item" : "items"})
+          <View style={styles.enhancedModalContainer}>
+            {/* Cart Header */}
+            <View style={styles.cartHeader}>
+              <View>
+                <Text style={styles.cartTitle}>Your Cart</Text>
+                <Text style={styles.cartSubtitle}>
+                  {totalItems()} {totalItems() === 1 ? "item" : "items"}
                 </Text>
-              )}
+              </View>
+              <TouchableOpacity onPress={handleClearCart}>
+                <Text style={styles.clearCartText}>Clear All</Text>
+              </TouchableOpacity>
             </View>
+
             {cart.length === 0 ? (
-              <Text>Your cart is empty.</Text>
+              <View style={styles.emptyCart}>
+                <Icon name="shopping-cart" size={64} color="#ccc" />
+                <Text style={styles.emptyCartText}>Your cart is empty</Text>
+                <Text style={styles.emptyCartSubtext}>Add some delicious items to get started</Text>
+              </View>
             ) : (
               <>
+                {/* Cart Items List */}
                 <FlatList
                   data={cart}
+                  renderItem={renderCartItem}
                   keyExtractor={(item) => item.id}
-                  renderItem={({ item }) => {
-                    const foodItem = menuItems.find((fi) => fi.id === item.id);
-                    return (
-                      <View style={[styles.cartRow, { alignItems: "center" }]}>
-                        <View
-                          style={{
-                            width: 60,
-                            height: 60,
-                            borderRadius: 8,
-                            backgroundColor: "#eee",
-                            justifyContent: "center",
-                            alignItems: "center",
-                            marginRight: 8,
-                          }}
-                        >
-                          {foodItem?.image ? (
-                            <Image
-                              source={{ uri: foodItem.image }}
-                              style={{ width: 60, height: 60, borderRadius: 8 }}
-                            />
-                          ) : (
-                            <Icon name="image" size={24} color="#888" />
-                          )}
-                        </View>
-                        <View style={{ flex: 1 }}>
-                          <Text style={{ fontWeight: "600" }}>{item.name}</Text>
-                          <View style={styles.quantityRow}>
-                            <TouchableOpacity onPress={() => changeQuantity(item.id, -1)}>
-                              <Icon name="minus" size={20} />
-                            </TouchableOpacity>
-                            <Text style={styles.quantityText}>{item.quantity}</Text>
-                            <TouchableOpacity onPress={() => changeQuantity(item.id, 1)}>
-                              <Icon name="plus" size={20} />
-                            </TouchableOpacity>
-                          </View>
-                        </View>
-                        <Text>R{(item.price * item.quantity).toFixed(2)}</Text>
-                        <TouchableOpacity onPress={() => removeFromCart(item.id)}>
-                          <Icon name="trash-2" size={20} color="red" />
-                        </TouchableOpacity>
-                      </View>
-                    );
-                  }}
+                  contentContainerStyle={styles.cartListContent}
+                  showsVerticalScrollIndicator={false}
                 />
-                <Text style={styles.totalText}>Total: R{cartTotal().toFixed(2)}</Text>
-                <TouchableOpacity style={styles.placeOrderBtn} onPress={proceedToCheckout}>
-                  <Text style={{ color: "#fff", fontWeight: "700" }}>Checkout</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={{
-                    marginTop: 8,
-                    padding: 12,
-                    borderRadius: 8,
-                    alignItems: "center",
-                    backgroundColor: "#ccc",
-                  }}
-                  onPress={() => setCart([])}
-                >
-                  <Text style={{ color: "#111", fontWeight: "600" }}>Clear Cart</Text>
+
+                {/* Cart Summary */}
+                <View style={styles.cartSummary}>
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Subtotal</Text>
+                    <Text style={styles.summaryValue}>R{cartTotal().toFixed(2)}</Text>
+                  </View>
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Delivery Fee</Text>
+                    <Text style={styles.summaryValue}>R{deliveryFee.toFixed(2)}</Text>
+                  </View>
+                  <View style={[styles.summaryRow, styles.totalRow]}>
+                    <Text style={styles.totalLabel}>Total</Text>
+                    <Text style={styles.totalValue}>R{(cartTotal() + deliveryFee).toFixed(2)}</Text>
+                  </View>
+                </View>
+
+                {/* Checkout Button */}
+                <TouchableOpacity style={styles.checkoutButton} onPress={proceedToCheckout}>
+                  <Text style={styles.checkoutButtonText}>Proceed to Checkout</Text>
                 </TouchableOpacity>
               </>
             )}
-            <TouchableOpacity style={{ marginTop: 8 }} onPress={() => setCartVisible(false)}>
-              <Text style={{ color: "#ff6b00", textAlign: "center" }}>Close</Text>
+
+            <TouchableOpacity style={styles.closeCartButton} onPress={() => setCartVisible(false)}>
+              <Text style={styles.closeCartText}>Continue Shopping</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-     
+      {/* Checkout Modal */}
       <Modal visible={checkoutVisible} animationType="slide" transparent>
         <View style={styles.modalBackground}>
           <View style={styles.modalContainer}>
@@ -709,7 +907,7 @@ export default function HomeScreen() {
               )}
             />
             <Text style={{ fontWeight: "700", marginTop: 16 }}>
-              Total: R{cartTotal().toFixed(2)}
+              Total: R{(cartTotal() + deliveryFee).toFixed(2)}
             </Text>
             <TextInput
               placeholder="Full Name"
@@ -723,12 +921,21 @@ export default function HomeScreen() {
               onChangeText={setDeliveryAddress}
               style={styles.input}
             />
-            <TouchableOpacity style={styles.placeOrderBtn} onPress={confirmCheckout}>
-              <Text style={{ color: "#fff", fontWeight: "700" }}>Confirm Order</Text>
+            <TouchableOpacity 
+              style={[styles.placeOrderBtn, isProcessingOrder && { opacity: 0.6 }]} 
+              onPress={confirmCheckout}
+              disabled={isProcessingOrder}
+            >
+              {isProcessingOrder ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={{ color: "#fff", fontWeight: "700" }}>Confirm Order</Text>
+              )}
             </TouchableOpacity>
             <TouchableOpacity
               style={{ marginTop: 8 }}
               onPress={() => setCheckoutVisible(false)}
+              disabled={isProcessingOrder}
             >
               <Text style={{ color: "#ff6b00", textAlign: "center" }}>Cancel</Text>
             </TouchableOpacity>
@@ -736,7 +943,7 @@ export default function HomeScreen() {
         </View>
       </Modal>
 
-      
+      {/* Order Confirmation Modal */}
       <Modal visible={orderConfirmedVisible} animationType="slide" transparent>
         <View style={styles.modalBackground}>
           <View style={styles.modalContainer}>
@@ -757,7 +964,7 @@ export default function HomeScreen() {
               <Text style={{ fontSize: 24, fontWeight: "700", marginBottom: 8 }}>
                 Order Placed!
               </Text>
-              <Text style={{ textAlign: "center", color: "#988", marginBottom: 16 }}>
+              <Text style={{ textAlign: "center", color: "#666", marginBottom: 16 }}>
                 Your order has been successfully placed and is being prepared.
               </Text>
               <View
@@ -771,7 +978,7 @@ export default function HomeScreen() {
               >
                 <Text style={{ fontSize: 13, color: "#666", marginBottom: 4 }}>Order ID</Text>
                 <Text style={{ fontSize: 18, fontWeight: "700" }}>
-                  #{lastOrderId.slice(0, 8)}
+                  #{lastOrderId.slice(0, 8).toUpperCase()}
                 </Text>
               </View>
               <View style={{ flexDirection: "row", alignItems: "center", padding: 8 }}>
@@ -790,7 +997,7 @@ export default function HomeScreen() {
                 alignItems: "center",
                 marginBottom: 8,
               }}
-              onPress={() => Alert.alert("Track Order", "Order ID: " + lastOrderId)}
+              onPress={handleTrackOrder}
             >
               <Text style={{ color: "#fff", fontWeight: "600" }}>Track Order</Text>
             </TouchableOpacity>
@@ -801,7 +1008,7 @@ export default function HomeScreen() {
                 borderRadius: 8,
                 alignItems: "center",
               }}
-              onPress={() => setOrderConfirmedVisible(false)}
+              onPress={handleBackToMenu}
             >
               <Text style={{ color: "#111", fontWeight: "600" }}>Back to Menu</Text>
             </TouchableOpacity>
@@ -809,7 +1016,7 @@ export default function HomeScreen() {
         </View>
       </Modal>
 
-     
+      {/* Edit Profile Modal */}
       <Modal visible={editProfileVisible} animationType="slide" transparent>
         <View style={styles.modalBackground}>
           <ScrollView
@@ -906,7 +1113,10 @@ export default function HomeScreen() {
               <TouchableOpacity style={styles.placeOrderBtn} onPress={saveUserProfile}>
                 <Text style={{ color: "#fff", fontWeight: "700" }}>Save Changes</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={{ marginTop: 8, padding: 12, alignItems: "center" }} onPress={() => setEditProfileVisible(false)}>
+              <TouchableOpacity 
+                style={{ marginTop: 8, padding: 12, alignItems: "center" }} 
+                onPress={() => setEditProfileVisible(false)}
+              >
                 <Text style={{ color: "#ff6b00", fontWeight: "600" }}>Cancel</Text>
               </TouchableOpacity>
             </View>
@@ -914,7 +1124,7 @@ export default function HomeScreen() {
         </View>
       </Modal>
 
-      
+      {/* Bottom Tabs */}
       <View style={styles.tabs}>
         <TouchableOpacity onPress={() => setActiveTab("home")} style={styles.tabBtn}>
           <Icon name="home" size={24} color={activeTab === "home" ? "#ff6b00" : "#999"} />
@@ -933,59 +1143,440 @@ export default function HomeScreen() {
   );
 }
 
-
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: "#fff" },
-  header: { fontSize: 32, fontWeight: "700", marginBottom: 16, paddingHorizontal: 16 },
-  categories: { flexDirection: "row", marginBottom: 16, paddingHorizontal: 16 },
+  header: { fontSize: 32, fontWeight: "700", marginBottom: 16 },
+  categories: { flexDirection: "row", marginBottom: 16 },
   chip: { padding: 8, borderRadius: 20, borderWidth: 1, borderColor: "#ccc", marginRight: 8 },
-  chipActive: { backgroundColor: "#ff6b00" },
+  chipActive: { backgroundColor: "#ff6b00", borderColor: "#ff6b00" },
   chipTextActive: { color: "#fff", fontWeight: "600" },
-  centered: { flex: 1, justifyContent: "center", alignItems: "center", marginTop: 50 },
-  card: { flexDirection: "row", padding: 12, backgroundColor: "#f4f4f4", borderRadius: 12, marginBottom: 12, marginHorizontal: 16 },
-  foodImage: { width: 100, height: 100, justifyContent: "center", alignItems: "center", marginRight: 12 },
+  centered: { flex: 1, justifyContent: "center", alignItems: "center", padding: 32 },
+  card: { 
+    flexDirection: "row", 
+    padding: 12, 
+    backgroundColor: "#f4f4f4", 
+    borderRadius: 12, 
+    marginBottom: 12,
+  },
+  foodImage: { 
+    width: 100, 
+    height: 100, 
+    backgroundColor: "#e0e0e0",
+    borderRadius: 8,
+    justifyContent: "center", 
+    alignItems: "center", 
+    marginRight: 12,
+  },
   foodInfo: { flex: 1, justifyContent: "space-between" },
   foodTitle: { fontSize: 16, fontWeight: "700" },
-  foodDesc: { color: "#788", marginVertical: 4 },
+  foodDesc: { color: "#666", marginVertical: 4, fontSize: 13 },
   priceRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
-  price: { fontWeight: "700" },
+  price: { fontWeight: "700", fontSize: 16, color: "#111" },
   addBtn: { backgroundColor: "#ff6b00", padding: 8, borderRadius: 8 },
-  cartFab: { position: "absolute", bottom: 70, right: 16, backgroundColor: "#ff6b00", borderRadius: 30, padding: 12, flexDirection: "row", alignItems: "center", justifyContent: "center" },
-  cartBadge: { position: "absolute", top: -6, right: -6, backgroundColor: "#fff", color: "#ff6b00", borderRadius: 8, paddingHorizontal: 6, fontWeight: "700", fontSize: 12 },
-  modalBackground: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", alignItems: "center" },
-  modalContainer: { width: "90%", backgroundColor: "#fff", padding: 16, borderRadius: 12, maxHeight: "80%" },
-  cartRow: { flexDirection: "row", justifyContent: "space-between", marginBottom: 12 },
-  quantityRow: { flexDirection: "row", alignItems: "center", marginTop: 4 },
-  quantityText: { marginHorizontal: 8 },
+  cartFab: { 
+    position: "absolute", 
+    bottom: 70, 
+    right: 16, 
+    backgroundColor: "#ff6b00", 
+    borderRadius: 30, 
+    padding: 16,
+    elevation: 6,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+  },
+  cartBadge: { 
+    position: "absolute", 
+    top: -6, 
+    right: -6, 
+    backgroundColor: "#DC3545", 
+    color: "#fff", 
+    borderRadius: 10, 
+    minWidth: 20,
+    height: 20,
+    paddingHorizontal: 6, 
+    fontWeight: "700", 
+    fontSize: 12,
+    textAlign: "center",
+    lineHeight: 20,
+  },
+  modalBackground: { 
+    flex: 1, 
+    backgroundColor: "rgba(0,0,0,0.5)", 
+    justifyContent: "flex-end",
+  },
+  modalContainer: { 
+    width: "100%", 
+    backgroundColor: "#fff", 
+    padding: 16, 
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: "80%",
+  },
+  enhancedModalContainer: {
+    width: "100%",
+    backgroundColor: "#fff",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: 24,
+    paddingBottom: 32,
+    maxHeight: "90%",
+  },
+  cartHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    paddingHorizontal: 20,
+    marginBottom: 20,
+  },
+  cartTitle: {
+    fontSize: 24,
+    fontWeight: "700",
+    color: "#111",
+  },
+  cartSubtitle: {
+    fontSize: 14,
+    color: "#666",
+    marginTop: 4,
+  },
+  clearCartText: {
+    color: "#DC3545",
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  emptyCart: {
+    flex: 1,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 60,
+  },
+  emptyCartText: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: "#111",
+    marginTop: 16,
+  },
+  emptyCartSubtext: {
+    fontSize: 14,
+    color: "#666",
+    marginTop: 8,
+  },
+  cartListContent: {
+    paddingHorizontal: 20,
+    paddingBottom: 20,
+  },
+  cartItemCard: {
+    backgroundColor: "#fff",
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: "#eee",
+  },
+  cartItemRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginBottom: 12,
+  },
+  cartItemImage: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+  },
+  cartItemImagePlaceholder: {
+    width: 60,
+    height: 60,
+    borderRadius: 8,
+    backgroundColor: "#f0f0f0",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  cartItemInfo: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  cartItemName: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#111",
+    marginBottom: 4,
+  },
+  cartItemPrice: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#ff6b00",
+    marginTop: 4,
+  },
+  removeButton: {
+    padding: 8,
+  },
+  quantityRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "flex-end",
+  },
+  quantityButton: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: "#f0f0f0",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  quantityValue: {
+    fontSize: 16,
+    fontWeight: "600",
+    marginHorizontal: 16,
+    minWidth: 24,
+    textAlign: "center",
+  },
+  cartSummary: {
+    backgroundColor: "#f9f9f9",
+    borderRadius: 12,
+    padding: 16,
+    marginHorizontal: 20,
+    marginBottom: 16,
+  },
+  summaryRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    marginBottom: 12,
+  },
+  summaryLabel: {
+    fontSize: 14,
+    color: "#666",
+  },
+  summaryValue: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#111",
+  },
+  totalRow: {
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: "#e0e0e0",
+    marginBottom: 0,
+  },
+  totalLabel: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#111",
+  },
+  totalValue: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: "#ff6b00",
+  },
+  checkoutButton: {
+    backgroundColor: "#ff6b00",
+    paddingVertical: 16,
+    borderRadius: 12,
+    alignItems: "center",
+    marginHorizontal: 20,
+    marginBottom: 12,
+  },
+  checkoutButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  closeCartButton: {
+    paddingVertical: 12,
+    alignItems: "center",
+    marginHorizontal: 20,
+  },
+  closeCartText: {
+    color: "#ff6b00",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  cartRow: { 
+    flexDirection: "row", 
+    justifyContent: "space-between", 
+    marginBottom: 8,
+    paddingVertical: 4,
+  },
   totalText: { fontWeight: "700", fontSize: 18, marginTop: 8 },
-  placeOrderBtn: { backgroundColor: "#ff6b00", padding: 12, borderRadius: 8, alignItems: "center", marginTop: 8 },
-  input: { borderWidth: 1, borderColor: "#ccc", padding: 12, borderRadius: 8, marginTop: 8 },
-  orderCard: { backgroundColor: "#f4f4f4", padding: 12, borderRadius: 12, marginBottom: 12 },
-  profileCard: { backgroundColor: "#f4f4f4", padding: 16, borderRadius: 12, alignItems: "center", marginBottom: 16 },
-  avatar: { width: 64, height: 64, borderRadius: 32, backgroundColor: "#ff6b00", justifyContent: "center", alignItems: "center", marginBottom: 8 },
+  placeOrderBtn: { 
+    backgroundColor: "#ff6b00", 
+    padding: 14, 
+    borderRadius: 12, 
+    alignItems: "center", 
+    marginTop: 16,
+  },
+  input: { 
+    borderWidth: 1, 
+    borderColor: "#ddd", 
+    padding: 14, 
+    borderRadius: 12, 
+    marginTop: 12,
+    fontSize: 15,
+  },
+  orderCard: { 
+    backgroundColor: "#fff", 
+    padding: 16, 
+    borderRadius: 12, 
+    marginBottom: 12,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  orderHeader: { 
+    flexDirection: "row", 
+    justifyContent: "space-between", 
+    alignItems: "flex-start", 
+    marginBottom: 12,
+  },
+  orderId: { 
+    fontSize: 16, 
+    fontWeight: "600",
+    color: "#111",
+  },
+  orderDate: { 
+    fontSize: 13, 
+    color: "#666",
+    marginTop: 4,
+  },
+  statusBadge: { 
+    paddingHorizontal: 12, 
+    paddingVertical: 6, 
+    borderRadius: 20,
+  },
+  statusText: { 
+    color: "#fff", 
+    fontSize: 12, 
+    fontWeight: "600",
+  },
+  orderItemsContainer: {
+    marginBottom: 12,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: "#eee",
+  },
+  orderItemText: {
+    fontSize: 14,
+    color: "#444",
+    marginBottom: 4,
+  },
+  moreItemsText: {
+    fontSize: 13,
+    color: "#999",
+    fontStyle: "italic",
+    marginTop: 2,
+  },
+  orderFooter: { 
+    flexDirection: "row", 
+    justifyContent: "space-between", 
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  orderTotal: { 
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#ff6b00",
+  },
+  deliveryInfo: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#f9f9f9",
+    padding: 8,
+    borderRadius: 6,
+    marginTop: 4,
+  },
+  deliveryText: {
+    fontSize: 13,
+    color: "#666",
+    marginLeft: 8,
+    flex: 1,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    marginTop: 16,
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  emptyText: {
+    fontSize: 15,
+    color: "#666",
+    textAlign: "center",
+    marginBottom: 24,
+  },
+  signInButton: {
+    backgroundColor: "#ff6b00",
+    paddingHorizontal: 32,
+    paddingVertical: 12,
+    borderRadius: 8,
+  },
+  signInButtonText: {
+    color: "#fff",
+    fontWeight: "600",
+    fontSize: 16,
+  },
+  profileCard: { 
+    backgroundColor: "#f4f4f4", 
+    padding: 16, 
+    borderRadius: 12, 
+    alignItems: "center", 
+    marginBottom: 16,
+  },
+  avatar: { 
+    width: 64, 
+    height: 64, 
+    borderRadius: 32, 
+    backgroundColor: "#ff6b00", 
+    justifyContent: "center", 
+    alignItems: "center", 
+    marginBottom: 8,
+  },
   profileName: { fontWeight: "700", fontSize: 18 },
-  profileEmail: { color: "#789", marginBottom: 8 },
-  editProfileBtn: { backgroundColor: "#ff6b00", padding: 8, borderRadius: 8 },
+  profileEmail: { color: "#666", marginBottom: 8 },
+  editProfileBtn: { backgroundColor: "#ff6b00", padding: 8, borderRadius: 8, marginTop: 8 },
   editProfileText: { color: "#fff", fontWeight: "600" },
   profileSection: { marginBottom: 16 },
-  profileItem: { flexDirection: "row", justifyContent: "space-between", paddingVertical: 12, borderBottomWidth: 1, borderColor: "#eee", alignItems: "center" },
+  profileItem: { 
+    flexDirection: "row", 
+    justifyContent: "space-between", 
+    paddingVertical: 12, 
+    borderBottomWidth: 1, 
+    borderColor: "#eee", 
+    alignItems: "center",
+  },
   profileItemLeft: { flexDirection: "row", alignItems: "center" },
-  profileItemText: { marginLeft: 12, fontSize: 16, fontWeight: "600" },
-  profileItemValue: { marginLeft: 12, fontSize: 14, color: "#666", marginTop: 2 },
-  tabs: { flexDirection: "row", borderTopWidth: 1, borderColor: "#eee", height: 60, justifyContent: "space-around", alignItems: "center" },
+  profileItemText: { fontSize: 16, fontWeight: "600" },
+  profileItemValue: { fontSize: 14, color: "#666", marginTop: 2 },
+  tabs: { 
+    flexDirection: "row", 
+    borderTopWidth: 1, 
+    borderColor: "#eee", 
+    height: 60, 
+    justifyContent: "space-around", 
+    alignItems: "center",
+    backgroundColor: "#fff",
+  },
   tabBtn: { alignItems: "center", justifyContent: "center" },
-  sectionTitle: { fontSize: 18, fontWeight: "700", marginBottom: 8, color: "#111" },
+  sectionTitle: { fontSize: 18, fontWeight: "700", marginBottom: 8, color: "#111", marginTop: 8 },
   sectionSubtitle: { fontSize: 13, color: "#666", marginBottom: 12 },
-  inputContainer: { flexDirection: "row", alignItems: "center", borderWidth: 1, borderColor: "#ccc", borderRadius: 8, marginTop: 8, paddingHorizontal: 12 },
+  inputContainer: { 
+    flexDirection: "row", 
+    alignItems: "center", 
+    borderWidth: 1, 
+    borderColor: "#ddd", 
+    borderRadius: 12, 
+    marginTop: 12, 
+    paddingHorizontal: 12,
+  },
   inputIcon: { marginRight: 8 },
-  securityNote: { flexDirection: "row", alignItems: "center", backgroundColor: "#f0f9f4", padding: 12, borderRadius: 8, marginTop: 12 },
-  securityText: { fontSize: 12, color: "#28a745", flex: 1 },
-
-  /* skeleton styles */
-  skeletonCard: { flexDirection: "row", padding: 12, backgroundColor: "#fff", borderRadius: 12, marginBottom: 12, alignItems: "center" },
-  skeletonImage: { width: 100, height: 80, backgroundColor: "#eee", borderRadius: 8 },
-  skeletonLineShort: { width: "40%", height: 12, backgroundColor: "#eee", borderRadius: 6, marginTop: 6 },
-  skeletonLineLong: { width: "70%", height: 12, backgroundColor: "#eee", borderRadius: 6, marginTop: 8 },
-  skeletonPrice: { width: 60, height: 20, backgroundColor: "#eee", borderRadius: 6 },
-  skeletonBtn: { width: 40, height: 28, backgroundColor: "#eee", borderRadius: 6 },
+  securityNote: { 
+    flexDirection: "row", 
+    alignItems: "center", 
+    backgroundColor: "#f0f9f4", 
+    padding: 12, 
+    borderRadius: 8, 
+    marginTop: 12,
+  },
+  securityText: { fontSize: 12, color: "#28a745", marginLeft: 8, flex: 1 },
 });
