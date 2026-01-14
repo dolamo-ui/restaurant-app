@@ -5,14 +5,11 @@ import {
   ScrollView,
   TouchableOpacity,
   StyleSheet,
-  FlatList,
-  Image,
+  Alert,
   Modal,
   TextInput,
-  Alert,
   ActivityIndicator,
-  RefreshControl,
-  Pressable,
+  FlatList,
 } from "react-native";
 import Icon from "react-native-vector-icons/Feather";
 import { auth, db } from "../firebase/firebaseConfig";
@@ -30,6 +27,14 @@ import {
   orderBy,
   serverTimestamp,
 } from "firebase/firestore";
+
+// Import components
+import FoodItem from "../components/FoodItem";
+import CartItemComponent from "../components/CartItem";
+import OrderCard from "../components/OrderCard";
+import CartModal from "../components/CartModal";
+import HomeTab from "../components/HomeTab";
+import OrdersTab from "../components/OrdersTab";
 
 type TabType = "home" | "orders" | "profile";
 type CartItem = {
@@ -57,24 +62,6 @@ type MenuItem = {
   description?: string;
   image?: string;
   status?: string;
-};
-
-const statusColors: Record<string, string> = {
-  pending: "#FFC107",
-  confirmed: "#17A2B8",
-  preparing: "#F1A208",
-  out_for_delivery: "#007BFF",
-  delivered: "#28A745",
-  cancelled: "#DC3545",
-};
-
-const statusLabels: Record<string, string> = {
-  pending: "Pending",
-  confirmed: "Confirmed",
-  preparing: "Preparing",
-  out_for_delivery: "Out for Delivery",
-  delivered: "Delivered",
-  cancelled: "Cancelled",
 };
 
 export default function HomeScreen() {
@@ -106,6 +93,8 @@ export default function HomeScreen() {
   const [lastOrderId, setLastOrderId] = useState("");
   const [isProcessingOrder, setIsProcessingOrder] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const deliveryFee = 5.0;
 
   // Auth state listener
   useEffect(() => {
@@ -312,24 +301,6 @@ export default function HomeScreen() {
     return `•••• •••• •••• ${cleaned.slice(-4)}`;
   };
 
-  const formatDate = (timestamp: any) => {
-    if (!timestamp) return "";
-    let date: Date;
-    if (timestamp?.toDate) {
-      date = timestamp.toDate();
-    } else if (timestamp instanceof Date) {
-      date = timestamp;
-    } else {
-      return "";
-    }
-    return date.toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      hour: "2-digit",
-      minute: "2-digit",
-    });
-  };
-
   const addToCart = (item: MenuItem) => {
     setCart((prev) => {
       const existing = prev.find((ci) => ci.id === item.id);
@@ -377,7 +348,6 @@ export default function HomeScreen() {
 
   const cartTotal = () => cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
   const totalItems = () => cart.reduce((sum, item) => sum + item.quantity, 0);
-  const deliveryFee = 5.0;
 
   const proceedToCheckout = () => {
     if (!user) {
@@ -453,20 +423,6 @@ export default function HomeScreen() {
             );
           }
         }
-      } else {
-        setOrders((prev) => [
-          {
-            id: adminOrderId,
-            items: cart,
-            total: cartTotal() + deliveryFee,
-            deliveryName,
-            deliveryAddress,
-            timestamp: now,
-            status: "pending",
-            uid: null,
-          },
-          ...prev,
-        ]);
       }
 
       setLastOrderId(adminOrderId);
@@ -516,227 +472,6 @@ export default function HomeScreen() {
   const onRefresh = () => {
     setIsRefreshing(true);
   };
-
-  const filteredItems = selectedCategory
-    ? menuItems.filter((i) => i.category === selectedCategory)
-    : menuItems;
-
-  const renderFoodItem = ({ item }: { item: MenuItem }) => (
-    <View style={styles.card}>
-      <View style={styles.foodImage}>
-        {item.image ? (
-          <Image source={{ uri: item.image }} style={{ width: 100, height: 100, borderRadius: 8 }} />
-        ) : (
-          <Icon name="image" size={32} color="#888" />
-        )}
-      </View>
-      <View style={styles.foodInfo}>
-        <View>
-          <Text style={styles.foodTitle}>{item.name}</Text>
-          <Text style={styles.foodDesc}>{item.description}</Text>
-        </View>
-        <View style={styles.priceRow}>
-          <Text style={styles.price}>R{parseFloat(item.price || "0").toFixed(2)}</Text>
-          <TouchableOpacity style={styles.addBtn} onPress={() => addToCart(item)}>
-            <Icon name="plus" color="#fff" />
-          </TouchableOpacity>
-        </View>
-      </View>
-    </View>
-  );
-
-  const renderCartItem = ({ item }: { item: CartItem }) => {
-    const itemTotal = item.price * item.quantity;
-
-    return (
-      <View style={styles.cartItemCard}>
-        <View style={styles.cartItemRow}>
-          {item.image ? (
-            <Image source={{ uri: item.image }} style={styles.cartItemImage} />
-          ) : (
-            <View style={styles.cartItemImagePlaceholder}>
-              <Icon name="image" size={24} color="#888" />
-            </View>
-          )}
-          
-          <View style={styles.cartItemInfo}>
-            <Text style={styles.cartItemName} numberOfLines={1}>{item.name}</Text>
-            <Text style={styles.cartItemPrice}>
-              R{itemTotal.toFixed(2)}
-            </Text>
-          </View>
-
-          <Pressable onPress={() => removeFromCart(item.id)} style={styles.removeButton}>
-            <Icon name="trash-2" size={18} color="#DC3545" />
-          </Pressable>
-        </View>
-
-        <View style={styles.quantityRow}>
-          <Pressable
-            onPress={() => changeQuantity(item.id, -1)}
-            style={styles.quantityButton}
-          >
-            <Icon name="minus" size={18} color="#111" />
-          </Pressable>
-          <Text style={styles.quantityValue}>{item.quantity}</Text>
-          <Pressable
-            onPress={() => changeQuantity(item.id, 1)}
-            style={styles.quantityButton}
-          >
-            <Icon name="plus" size={18} color="#111" />
-          </Pressable>
-        </View>
-      </View>
-    );
-  };
-
-  const renderOrderItem = ({ item }: { item: Order }) => {
-    const statusColor = statusColors[item.status || "pending"] || "#999";
-    const statusLabel = statusLabels[item.status || "pending"] || "Pending";
-
-    return (
-      <View style={styles.orderCard}>
-        <View style={styles.orderHeader}>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.orderId}>
-              Order #{item.id.slice(0, 8).toUpperCase()}
-            </Text>
-            <Text style={styles.orderDate}>
-              {formatDate(item.timestamp)}
-            </Text>
-          </View>
-          <View style={[styles.statusBadge, { backgroundColor: statusColor }]}>
-            <Text style={styles.statusText}>{statusLabel}</Text>
-          </View>
-        </View>
-
-        <View style={styles.orderItemsContainer}>
-          {item.items.slice(0, 2).map((orderItem, index) => (
-            <Text key={index} style={styles.orderItemText}>
-              {orderItem.name} x {orderItem.quantity}
-            </Text>
-          ))}
-          {item.items.length > 2 && (
-            <Text style={styles.moreItemsText}>
-              +{item.items.length - 2} more item{item.items.length - 2 > 1 ? "s" : ""}
-            </Text>
-          )}
-        </View>
-
-        <View style={styles.orderFooter}>
-          <Text style={styles.orderTotal}>
-            R{item.total.toFixed(2)}
-          </Text>
-          <Icon name="chevron-right" size={20} color="#999" />
-        </View>
-
-        {item.deliveryAddress && (
-          <View style={styles.deliveryInfo}>
-            <Icon name="map-pin" size={14} color="#666" />
-            <Text style={styles.deliveryText} numberOfLines={1}>
-              {item.deliveryAddress}
-            </Text>
-          </View>
-        )}
-      </View>
-    );
-  };
-
-  const renderHome = () => (
-    <ScrollView style={{ flex: 1, paddingHorizontal: 16, paddingTop: 16 }}>
-      <Text style={styles.header}>FoodHub</Text>
-      
-      <ScrollView
-        horizontal
-        showsHorizontalScrollIndicator={false}
-        style={styles.categories}
-      >
-        <TouchableOpacity
-          style={[styles.chip, selectedCategory === null && styles.chipActive]}
-          onPress={() => setSelectedCategory(null)}
-        >
-          <Text style={selectedCategory === null ? styles.chipTextActive : undefined}>
-            All
-          </Text>
-        </TouchableOpacity>
-        {categories.map((c) => (
-          <TouchableOpacity
-            key={c.id}
-            style={[styles.chip, selectedCategory === c.name && styles.chipActive]}
-            onPress={() => setSelectedCategory(c.name)}
-          >
-            <Text style={selectedCategory === c.name ? styles.chipTextActive : undefined}>
-              {c.name}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </ScrollView>
-
-      {loadingMenu ? (
-        <ActivityIndicator size="large" color="#ff6b00" style={{ marginTop: 40 }} />
-      ) : filteredItems.length === 0 ? (
-        <View style={styles.centered}>
-          <Icon name="coffee" size={64} color="#888" />
-          <Text>No Menu Items</Text>
-          <Text>The menu is empty.</Text>
-        </View>
-      ) : (
-        <FlatList
-          data={filteredItems}
-          renderItem={renderFoodItem}
-          keyExtractor={(item) => item.id}
-          scrollEnabled={false}
-          contentContainerStyle={{ paddingBottom: 100 }}
-        />
-      )}
-    </ScrollView>
-  );
-
-  const renderOrders = () => (
-    <View style={{ flex: 1 }}>
-      {!user ? (
-        <View style={styles.centered}>
-          <Icon name="shopping-bag" size={64} color="#999" />
-          <Text style={styles.emptyTitle}>Sign In to View Orders</Text>
-          <Text style={styles.emptyText}>
-            Sign in to see your order history
-          </Text>
-          <TouchableOpacity style={styles.signInButton}>
-            <Text style={styles.signInButtonText}>Sign In</Text>
-          </TouchableOpacity>
-        </View>
-      ) : orders.length === 0 ? (
-        <View style={styles.centered}>
-          <Icon name="shopping-bag" size={64} color="#999" />
-          <Text style={styles.emptyTitle}>No Orders Yet</Text>
-          <Text style={styles.emptyText}>
-            Your order history will appear here
-          </Text>
-          <TouchableOpacity 
-            style={styles.signInButton}
-            
-  onPress={() => setActiveTab("home")}
-          >
-            <Text style={styles.signInButtonText}>Start Ordering</Text>
-          </TouchableOpacity>
-        </View>
-      ) : (
-        <FlatList
-          data={orders}
-          renderItem={renderOrderItem}
-          keyExtractor={(item) => item.id}
-          contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
-          refreshControl={
-            <RefreshControl
-              refreshing={isRefreshing}
-              onRefresh={onRefresh}
-              tintColor="#ff6b00"
-            />
-          }
-        />
-      )}
-    </View>
-  );
 
   const ProfileItem = ({
     icon,
@@ -808,8 +543,25 @@ export default function HomeScreen() {
 
   return (
     <View style={styles.container}>
-      {activeTab === "home" && renderHome()}
-      {activeTab === "orders" && renderOrders()}
+      {activeTab === "home" && (
+        <HomeTab
+          menuItems={menuItems}
+          categories={categories}
+          selectedCategory={selectedCategory}
+          loadingMenu={loadingMenu}
+          onSelectCategory={setSelectedCategory}
+          onAddToCart={addToCart}
+        />
+      )}
+      {activeTab === "orders" && (
+        <OrdersTab
+          user={user}
+          orders={orders}
+          isRefreshing={isRefreshing}
+          onRefresh={onRefresh}
+          onNavigateHome={() => setActiveTab("home")}
+        />
+      )}
       {activeTab === "profile" && renderProfile()}
 
       {/* Cart FAB */}
@@ -820,69 +572,17 @@ export default function HomeScreen() {
         </TouchableOpacity>
       )}
 
-      {/* Enhanced Cart Modal */}
-      <Modal visible={cartVisible} animationType="slide" transparent>
-        <View style={styles.modalBackground}>
-          <View style={styles.enhancedModalContainer}>
-            {/* Cart Header */}
-            <View style={styles.cartHeader}>
-              <View>
-                <Text style={styles.cartTitle}>Your Cart</Text>
-                <Text style={styles.cartSubtitle}>
-                  {totalItems()} {totalItems() === 1 ? "item" : "items"}
-                </Text>
-              </View>
-              <TouchableOpacity onPress={handleClearCart}>
-                <Text style={styles.clearCartText}>Clear All</Text>
-              </TouchableOpacity>
-            </View>
-
-            {cart.length === 0 ? (
-              <View style={styles.emptyCart}>
-                <Icon name="shopping-cart" size={64} color="#ccc" />
-                <Text style={styles.emptyCartText}>Your cart is empty</Text>
-                <Text style={styles.emptyCartSubtext}>Add some delicious items to get started</Text>
-              </View>
-            ) : (
-              <>
-                {/* Cart Items List */}
-                <FlatList
-                  data={cart}
-                  renderItem={renderCartItem}
-                  keyExtractor={(item) => item.id}
-                  contentContainerStyle={styles.cartListContent}
-                  showsVerticalScrollIndicator={false}
-                />
-
-                {/* Cart Summary */}
-                <View style={styles.cartSummary}>
-                  <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>Subtotal</Text>
-                    <Text style={styles.summaryValue}>R{cartTotal().toFixed(2)}</Text>
-                  </View>
-                  <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>Delivery Fee</Text>
-                    <Text style={styles.summaryValue}>R{deliveryFee.toFixed(2)}</Text>
-                  </View>
-                  <View style={[styles.summaryRow, styles.totalRow]}>
-                    <Text style={styles.totalLabel}>Total</Text>
-                    <Text style={styles.totalValue}>R{(cartTotal() + deliveryFee).toFixed(2)}</Text>
-                  </View>
-                </View>
-
-                {/* Checkout Button */}
-                <TouchableOpacity style={styles.checkoutButton} onPress={proceedToCheckout}>
-                  <Text style={styles.checkoutButtonText}>Proceed to Checkout</Text>
-                </TouchableOpacity>
-              </>
-            )}
-
-            <TouchableOpacity style={styles.closeCartButton} onPress={() => setCartVisible(false)}>
-              <Text style={styles.closeCartText}>Continue Shopping</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
+      {/* Cart Modal */}
+      <CartModal
+        visible={cartVisible}
+        cart={cart}
+        onClose={() => setCartVisible(false)}
+        onClearCart={handleClearCart}
+        onRemoveItem={removeFromCart}
+        onChangeQuantity={changeQuantity}
+        onCheckout={proceedToCheckout}
+        deliveryFee={deliveryFee}
+      />
 
       {/* Checkout Modal */}
       <Modal visible={checkoutVisible} animationType="slide" transparent>
