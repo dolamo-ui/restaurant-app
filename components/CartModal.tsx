@@ -1,231 +1,350 @@
-import React from "react";
-import { 
-  View, 
-  Text, 
-  Modal, 
-  FlatList, 
-  TouchableOpacity, 
-  StyleSheet 
+import React, { useState, useRef } from "react";
+import {
+  View, Text, Modal, FlatList,
+  TouchableOpacity, StyleSheet, Animated, Alert,
 } from "react-native";
-import Icon from "react-native-vector-icons/Feather";
+import { Feather } from "@expo/vector-icons";
 import CartItemComponent from "./CartItem";
+import GuestLoginPrompt from "./GuestLoginPrompt";
 
 type CartItem = {
-  id: string;
-  name: string;
-  price: number;
+  id:       string;
+  name:     string;
+  price:    number;
   quantity: number;
-  image?: string;
+  image?:   string;
+  extras?:  { id: string; label: string; price: number }[];
+  note?:    string;
 };
 
 interface CartModalProps {
-  visible: boolean;
-  cart: CartItem[];
-  onClose: () => void;
-  onClearCart: () => void;
-  onRemoveItem: (id: string) => void;
-  onChangeQuantity: (id: string, delta: number) => void;
-  onCheckout: () => void;
-  deliveryFee: number;
+  visible:           boolean;
+  cart:              CartItem[];
+  isGuest:           boolean;
+  onClose:           () => void;
+  onClearCart:       () => void;
+  onRemoveItem:      (id: string) => void;
+  onChangeQuantity:  (id: string, delta: number) => void;
+  onUpdateNote?:     (id: string, note: string) => void;
+  onCheckout:        () => void;
+  deliveryFee:       number;
 }
 
 export default function CartModal({
-  visible,
-  cart,
-  onClose,
-  onClearCart,
-  onRemoveItem,
-  onChangeQuantity,
-  onCheckout,
-  deliveryFee,
+  visible, cart, isGuest, onClose, onClearCart,
+  onRemoveItem, onChangeQuantity, onUpdateNote,
+  onCheckout, deliveryFee,
 }: CartModalProps) {
-  const cartTotal = cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
-  const totalItems = cart.reduce((sum, item) => sum + item.quantity, 0);
+  const [showGuestPrompt, setShowGuestPrompt] = useState(false);
+  const clearBtnScale = useRef(new Animated.Value(1)).current;
+
+  const cartTotal  = cart.reduce((sum, i) => sum + i.price * i.quantity, 0);
+  const totalItems = cart.reduce((sum, i) => sum + i.quantity, 0);
+  const grandTotal = cartTotal + deliveryFee;
+
+  const handleCheckoutPress = () => {
+    if (isGuest) {
+      setShowGuestPrompt(true);
+    } else {
+      onCheckout();
+    }
+  };
+
+  // ── Clear All with confirmation ──────────────────────────────────────────────
+  const handleClearAll = () => {
+    // Bounce animation on the button
+    Animated.sequence([
+      Animated.spring(clearBtnScale, { toValue: 0.88, useNativeDriver: true, tension: 300, friction: 10 }),
+      Animated.spring(clearBtnScale, { toValue: 1,    useNativeDriver: true, tension: 300, friction: 10 }),
+    ]).start();
+
+    Alert.alert(
+      "Clear Cart",
+      `Remove all ${totalItems} item${totalItems !== 1 ? "s" : ""} from your cart?`,
+      [
+        { text: "Keep Items", style: "cancel" },
+        {
+          text: "Clear All",
+          style: "destructive",
+          onPress: () => onClearCart(),
+        },
+      ],
+      { cancelable: true }
+    );
+  };
 
   return (
-    <Modal visible={visible} animationType="slide" transparent>
-      <View style={styles.modalBackground}>
-        <View style={styles.enhancedModalContainer}>
-          <View style={styles.cartHeader}>
-            <View>
-              <Text style={styles.cartTitle}>Your Cart</Text>
-              <Text style={styles.cartSubtitle}>
-                {totalItems} {totalItems === 1 ? "item" : "items"}
-              </Text>
-            </View>
-            <TouchableOpacity onPress={onClearCart}>
-              <Text style={styles.clearCartText}>Clear All</Text>
-            </TouchableOpacity>
-          </View>
+    <>
+      <Modal visible={visible} animationType="slide" transparent>
+        <View style={styles.backdrop}>
+          <View style={styles.sheet}>
 
-          {cart.length === 0 ? (
-            <View style={styles.emptyCart}>
-              <Icon name="shopping-cart" size={64} color="#ccc" />
-              <Text style={styles.emptyCartText}>Your cart is empty</Text>
-              <Text style={styles.emptyCartSubtext}>Add some delicious items to get started</Text>
-            </View>
-          ) : (
-            <>
-              <FlatList
-                data={cart}
-                renderItem={({ item }) => (
-                  <CartItemComponent
-                    item={item}
-                    onRemove={onRemoveItem}
-                    onChangeQuantity={onChangeQuantity}
-                  />
-                )}
-                keyExtractor={(item) => item.id}
-                contentContainerStyle={styles.cartListContent}
-                showsVerticalScrollIndicator={false}
-              />
+            {/* ── Handle ── */}
+            <View style={styles.handle} />
 
-              <View style={styles.cartSummary}>
-                <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Subtotal</Text>
-                  <Text style={styles.summaryValue}>R{cartTotal.toFixed(2)}</Text>
-                </View>
-                <View style={styles.summaryRow}>
-                  <Text style={styles.summaryLabel}>Delivery Fee</Text>
-                  <Text style={styles.summaryValue}>R{deliveryFee.toFixed(2)}</Text>
-                </View>
-                <View style={[styles.summaryRow, styles.totalRow]}>
-                  <Text style={styles.totalLabel}>Total</Text>
-                  <Text style={styles.totalValue}>R{(cartTotal + deliveryFee).toFixed(2)}</Text>
-                </View>
+            {/* ── Header ── */}
+            <View style={styles.headerRow}>
+              <View>
+                <Text style={styles.title}>Your Cart</Text>
+                <Text style={styles.subtitle}>
+                  {totalItems} {totalItems === 1 ? "item" : "items"}
+                  {cart.length > 0 && (
+                    <Text style={styles.subtitleMuted}> · R{cartTotal.toFixed(2)}</Text>
+                  )}
+                </Text>
               </View>
 
-              <TouchableOpacity style={styles.checkoutButton} onPress={onCheckout}>
-                <Text style={styles.checkoutButtonText}>Proceed to Checkout</Text>
-              </TouchableOpacity>
-            </>
-          )}
+              <View style={styles.headerActions}>
+                {/* Clear All button */}
+                {cart.length > 0 && (
+                  <Animated.View style={{ transform: [{ scale: clearBtnScale }] }}>
+                    <TouchableOpacity
+                      style={styles.clearBtn}
+                      onPress={handleClearAll}
+                      activeOpacity={0.8}
+                    >
+                      <Feather name="trash-2" size={13} color="#EF4444" />
+                      <Text style={styles.clearBtnText}>Clear All</Text>
+                    </TouchableOpacity>
+                  </Animated.View>
+                )}
 
-          <TouchableOpacity style={styles.closeCartButton} onPress={onClose}>
-            <Text style={styles.closeCartText}>Continue Shopping</Text>
-          </TouchableOpacity>
+                {/* Close */}
+                <TouchableOpacity style={styles.closeBtn} onPress={onClose} activeOpacity={0.8}>
+                  <Feather name="x" size={18} color="#1A1A1A" />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* ── Empty state ── */}
+            {cart.length === 0 ? (
+              <View style={styles.empty}>
+                <View style={styles.emptyOuter}>
+                  <View style={styles.emptyInner}>
+                    <Feather name="shopping-cart" size={34} color="#FF5722" />
+                  </View>
+                </View>
+                <Text style={styles.emptyTitle}>Your cart is empty</Text>
+                <Text style={styles.emptySub}>Add some delicious items to get started</Text>
+                <TouchableOpacity style={styles.browseBtn} onPress={onClose} activeOpacity={0.85}>
+                  <Feather name="arrow-left" size={15} color="#fff" style={{ marginRight: 6 }} />
+                  <Text style={styles.browseBtnText}>Browse Menu</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <>
+                {/* ── Guest banner ── */}
+                {isGuest && (
+                  <View style={styles.guestBanner}>
+                    <Feather name="info" size={13} color="#FF5722" />
+                    <Text style={styles.guestBannerText}>
+                      Browsing as guest — sign in to place your order. Cart will be saved.
+                    </Text>
+                  </View>
+                )}
+
+                {/* ── Edit hint banner ── */}
+                <View style={styles.editHint}>
+                  <Feather name="edit-2" size={11} color="#3B82F6" />
+                  <Text style={styles.editHintText}>
+                    Tap ± to change quantity · Tap trash to remove · Tap "Add note" for instructions
+                  </Text>
+                </View>
+
+                {/* ── Items list ── */}
+                <FlatList
+                  data={cart}
+                  renderItem={({ item }) => (
+                    <CartItemComponent
+                      item={item}
+                      onRemove={onRemoveItem}
+                      onChangeQuantity={onChangeQuantity}
+                      onUpdateNote={onUpdateNote}
+                    />
+                  )}
+                  keyExtractor={(item) => item.id}
+                  contentContainerStyle={styles.listContent}
+                  showsVerticalScrollIndicator={false}
+                />
+
+                {/* ── Summary ── */}
+                <View style={styles.summary}>
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Subtotal</Text>
+                    <Text style={styles.summaryValue}>R{cartTotal.toFixed(2)}</Text>
+                  </View>
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>Delivery Fee</Text>
+                    <Text style={styles.summaryValue}>R{deliveryFee.toFixed(2)}</Text>
+                  </View>
+                  <View style={[styles.summaryRow, styles.totalRow]}>
+                    <Text style={styles.totalLabel}>Total</Text>
+                    <Text style={styles.totalValue}>R{grandTotal.toFixed(2)}</Text>
+                  </View>
+                </View>
+
+                {/* ── Checkout button ── */}
+                <TouchableOpacity
+                  style={styles.checkoutBtn}
+                  onPress={handleCheckoutPress}
+                  activeOpacity={0.85}
+                >
+                  <Feather name={isGuest ? "log-in" : "arrow-right"} size={17} color="#fff" />
+                  <Text style={styles.checkoutBtnText}>
+                    {isGuest ? "Sign In to Checkout" : `Checkout · R${grandTotal.toFixed(2)}`}
+                  </Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {/* ── Continue shopping ── */}
+            <TouchableOpacity style={styles.continueBtn} onPress={onClose} activeOpacity={0.8}>
+              <Text style={styles.continueBtnText}>Continue Shopping</Text>
+            </TouchableOpacity>
+
+          </View>
         </View>
-      </View>
-    </Modal>
+      </Modal>
+
+      {/* ── Guest Login Prompt ── */}
+      <GuestLoginPrompt
+        visible={showGuestPrompt}
+        itemCount={totalItems}
+        onClose={() => setShowGuestPrompt(false)}
+      />
+    </>
   );
 }
 
 const styles = StyleSheet.create({
-  modalBackground: { 
-    flex: 1, 
-    backgroundColor: "rgba(0,0,0,0.5)", 
+  backdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.52)",
     justifyContent: "flex-end",
   },
-  enhancedModalContainer: {
-    width: "100%",
-    backgroundColor: "#fff",
-    borderTopLeftRadius: 20,
-    borderTopRightRadius: 20,
-    paddingTop: 24,
+  sheet: {
+    backgroundColor: "#FAFAF8",
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
     paddingBottom: 32,
-    maxHeight: "90%",
+    maxHeight: "94%",
   },
-  cartHeader: {
+  handle: {
+    width: 40, height: 4, borderRadius: 2,
+    backgroundColor: "#E0E0E0", alignSelf: "center",
+    marginTop: 12, marginBottom: 16,
+  },
+
+  // Header
+  headerRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     paddingHorizontal: 20,
-    marginBottom: 20,
+    marginBottom: 10,
   },
-  cartTitle: {
-    fontSize: 24,
-    fontWeight: "700",
-    color: "#111",
-  },
-  cartSubtitle: {
-    fontSize: 14,
-    color: "#666",
-    marginTop: 4,
-  },
-  clearCartText: {
-    color: "#DC3545",
-    fontSize: 14,
-    fontWeight: "600",
-  },
-  emptyCart: {
-    flex: 1,
+  title:    { fontSize: 22, fontWeight: "900", color: "#1A1A1A", letterSpacing: -0.4 },
+  subtitle: { fontSize: 13, color: "#aaa", marginTop: 3, fontWeight: "500" },
+  subtitleMuted: { color: "#FF5722", fontWeight: "700" },
+  headerActions: { flexDirection: "row", alignItems: "center", gap: 8 },
+
+  clearBtn: {
+    flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: 60,
+    gap: 5,
+    backgroundColor: "#FEE2E2",
+    borderRadius: 20,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderWidth: 1,
+    borderColor: "#FECACA",
   },
-  emptyCartText: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: "#111",
-    marginTop: 16,
+  clearBtnText: { color: "#EF4444", fontSize: 13, fontWeight: "700" },
+  closeBtn: {
+    width: 36, height: 36, borderRadius: 18,
+    backgroundColor: "#F5F2EE",
+    justifyContent: "center", alignItems: "center",
   },
-  emptyCartSubtext: {
-    fontSize: 14,
-    color: "#666",
-    marginTop: 8,
+
+  // Banners
+  guestBanner: {
+    flexDirection: "row", alignItems: "flex-start", gap: 8,
+    backgroundColor: "#FFF3EE", marginHorizontal: 20,
+    marginBottom: 8, borderRadius: 12, padding: 12,
+    borderWidth: 1, borderColor: "#FFD5C2",
   },
-  cartListContent: {
-    paddingHorizontal: 20,
-    paddingBottom: 20,
+  guestBannerText: { flex: 1, fontSize: 12, color: "#FF5722", fontWeight: "600", lineHeight: 18 },
+
+  editHint: {
+    flexDirection: "row", alignItems: "center", gap: 7,
+    backgroundColor: "#EFF6FF", marginHorizontal: 20,
+    marginBottom: 12, borderRadius: 10, padding: 10,
+    borderWidth: 1, borderColor: "#BFDBFE",
   },
-  cartSummary: {
-    backgroundColor: "#f9f9f9",
-    borderRadius: 12,
+  editHintText: { flex: 1, fontSize: 11, color: "#1D4ED8", fontWeight: "600", lineHeight: 16 },
+
+  // Empty
+  empty: {
+    alignItems: "center",
+    paddingVertical: 52,
+    paddingHorizontal: 32,
+  },
+  emptyOuter: {
+    width: 96, height: 96, borderRadius: 48,
+    backgroundColor: "#FFF0EB",
+    justifyContent: "center", alignItems: "center", marginBottom: 20,
+  },
+  emptyInner: {
+    width: 68, height: 68, borderRadius: 34,
+    backgroundColor: "#FFE0D6",
+    justifyContent: "center", alignItems: "center",
+  },
+  emptyTitle: { fontSize: 20, fontWeight: "800", color: "#1A1A1A", marginBottom: 8 },
+  emptySub:   { fontSize: 14, color: "#aaa", textAlign: "center", lineHeight: 20, marginBottom: 24 },
+  browseBtn:  {
+    flexDirection: "row", alignItems: "center",
+    backgroundColor: "#FF5722", borderRadius: 50,
+    paddingHorizontal: 24, paddingVertical: 13,
+    shadowColor: "#FF5722", shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35, shadowRadius: 10, elevation: 5,
+  },
+  browseBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
+
+  // List
+  listContent: { paddingHorizontal: 16, paddingTop: 4, paddingBottom: 8 },
+
+  // Summary
+  summary: {
+    backgroundColor: "#fff",
+    borderRadius: 18,
     padding: 16,
-    marginHorizontal: 20,
-    marginBottom: 16,
+    marginHorizontal: 16,
+    marginBottom: 14,
+    borderWidth: 1,
+    borderColor: "#F0EDE8",
+    shadowColor: "#1A1A1A",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    elevation: 2,
   },
-  summaryRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    marginBottom: 12,
+  summaryRow:   { flexDirection: "row", justifyContent: "space-between", marginBottom: 10 },
+  summaryLabel: { fontSize: 14, color: "#888", fontWeight: "500" },
+  summaryValue: { fontSize: 14, fontWeight: "700", color: "#555" },
+  totalRow:     { paddingTop: 12, borderTopWidth: 1, borderTopColor: "#EDEAE5", marginBottom: 0 },
+  totalLabel:   { fontSize: 16, fontWeight: "800", color: "#1A1A1A" },
+  totalValue:   { fontSize: 22, fontWeight: "900", color: "#FF5722", letterSpacing: -0.4 },
+
+  // Checkout
+  checkoutBtn: {
+    flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10,
+    backgroundColor: "#FF5722", paddingVertical: 17, borderRadius: 18,
+    marginHorizontal: 16, marginBottom: 10,
+    shadowColor: "#FF5722", shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.35, shadowRadius: 12, elevation: 6,
   },
-  summaryLabel: {
-    fontSize: 14,
-    color: "#666",
-  },
-  summaryValue: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: "#111",
-  },
-  totalRow: {
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: "#e0e0e0",
-    marginBottom: 0,
-  },
-  totalLabel: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#111",
-  },
-  totalValue: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#ff6b00",
-  },
-  checkoutButton: {
-    backgroundColor: "#ff6b00",
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: "center",
-    marginHorizontal: 20,
-    marginBottom: 12,
-  },
-  checkoutButtonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "700",
-  },
-  closeCartButton: {
-    paddingVertical: 12,
-    alignItems: "center",
-    marginHorizontal: 20,
-  },
-  closeCartText: {
-    color: "#ff6b00",
-    fontSize: 16,
-    fontWeight: "600",
-  },
+  checkoutBtnText: { color: "#fff", fontSize: 16, fontWeight: "800" },
+
+  continueBtn:     { alignItems: "center", paddingVertical: 12, marginHorizontal: 16 },
+  continueBtnText: { color: "#FF5722", fontSize: 15, fontWeight: "700" },
 });
